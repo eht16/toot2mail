@@ -25,7 +25,7 @@ Toot2Mail will search for `toot2mail.conf` in the following locations (in that o
   - toot2mail.conf (in current working directory)
 
 An example configuration file can be found in the sources or online
-at https://raw.githubusercontent.com/eht16/toot2mail/master/toot2mail.conf.example.
+at https://raw.githubusercontent.com/eht16/toot2mail/main/toot2mail.conf.example.
 
 For details on the configuration options, consider the comments in the
 example configuration file.
