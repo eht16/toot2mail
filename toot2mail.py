@@ -146,6 +146,9 @@ class MastodonEmailProcessor:
                     self._username_exclude_boosts in self._usernames:
                 self._process_user()
                 sleep(randint(5, 30))  # give the remote instance a little time
+        except Exception as exc:
+            self._logger.exception('An error occurred while processing "%s@%s": %s',
+                                   self._username, self._hostname, exc)
         finally:
             self._write_toot_state()
             self._remove_lock()
@@ -185,12 +188,14 @@ class MastodonEmailProcessor:
 
     def _setup_logger(self):
         me = Path(__file__).name
+        stream_handler = logging.StreamHandler()
+        stream_handler.setLevel(logging.WARNING)
         syslog_handler = logging.handlers.SysLogHandler(address='/dev/log')
         syslog_handler.ident = f'{me}: '
         logging.basicConfig(
             format='[%(levelname)+8s] [%(process)-8s] [%(name)-30s] %(message)s',
             level=logging.INFO,
-            handlers=[syslog_handler])
+            handlers=[syslog_handler, stream_handler])
 
         self._logger = logging.getLogger(me)
 
@@ -237,15 +242,7 @@ class MastodonEmailProcessor:
             if self._username_exclude_boosts and toot.is_boost:
                 continue
 
-            mail_from = self._factor_mail_from(toot)
-            subject = self._factor_mail_subject(toot)
-            message = self._factor_mail_message(toot)
-            toot_timestamp = self._factor_toot_timestamp(toot)
-            attachments = self._factor_toot_attachments(toot)
-            # send the mail
-            self._send_mail(mail_from, subject, message, toot_timestamp, attachments)
-            # remember toot
-            self._add_toot_to_toot_state(toot)
+            self._process_toot(toot)
             toots_count += 1
 
         self._logger.info(
@@ -293,6 +290,21 @@ class MastodonEmailProcessor:
         user = self._toot_state.get(uid, {})
         user_toots = user.get('toots', [])
         return bool(toot.id in user_toots)
+
+    def _process_toot(self, toot):
+        try:
+            mail_from = self._factor_mail_from(toot)
+            subject = self._factor_mail_subject(toot)
+            message = self._factor_mail_message(toot)
+            toot_timestamp = self._factor_toot_timestamp(toot)
+            attachments = self._factor_toot_attachments(toot)
+            # send the mail
+            self._send_mail(mail_from, subject, message, toot_timestamp, attachments)
+            # remember toot
+            self._add_toot_to_toot_state(toot)
+        except Exception as exc:
+            self._logger.exception('An error occurred while processing "%s@%s" at toot %s: %s',
+                                   self._username, self._hostname, toot.id, exc)
 
     def _factor_mail_message(self, toot):
         message = MAIL_MESSAGE_TEMPLATE.format(
