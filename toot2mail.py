@@ -115,6 +115,7 @@ class MastodonEmailProcessor:
     def __init__(self):
         self._config = None
         self._proxies = {}
+        self._timeout = {}
         self._timeline_limit = None
         self._state_file_path = None
         self._lock_file_path = None
@@ -158,6 +159,7 @@ class MastodonEmailProcessor:
         config_file_paths = ('toot2mail.conf', config_filename)
         config_parser.read(config_file_paths)
 
+        self._timeout = config_parser.getfloat('settings', 'timeout', fallback=60)
         self._timeline_limit = config_parser.get('settings', 'timeline_limit')
         self._state_file_path = Path(config_parser.get('settings', 'state_file_path'))
         self._lock_file_path = Path(config_parser.get('settings', 'lock_file_path'))
@@ -279,7 +281,8 @@ class MastodonEmailProcessor:
             raise ValueError('No Mastodon host set!')
 
         url = urljoin(f'https://{self._hostname}', api_endpoint)
-        response = requests.get(url, params=query_params, proxies=self._proxies)
+        response = requests.get(url, params=query_params, proxies=self._proxies,
+                                timeout=self._timeout)
         response.raise_for_status()
 
         response_json = response.json()
@@ -375,7 +378,7 @@ class MastodonEmailProcessor:
     def _get_image(self, image_url):
         self._logger.info('Retrieve image "%s"', image_url)
         try:
-            response = requests.get(image_url, proxies=self._proxies)
+            response = requests.get(image_url, proxies=self._proxies, timeout=self._timeout)
             response.raise_for_status()
         except requests.exceptions.HTTPError as err:
             self._logger.warning('Unable to download image "%s": %s', image_url, err)

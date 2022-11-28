@@ -1,6 +1,8 @@
 [settings]
 # optional HTTP proxy to use for all outgoing HTTP requests, e.g. http://localhost:3128 or leave empty
 proxy=
+# timeout for HTTP requests
+timeout=60
 # how many toots to fetch from an account's timeline
 timeline_limit=25
 # file to store which toots were already processed
