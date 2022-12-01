@@ -331,7 +331,7 @@ class MastodonEmailProcessor:
     def _factor_video_list(self, toot):
         videos = ''
         for media in toot.media_attachments:
-            if media.type != 'video':
+            if media.type not in ('gifv', 'video'):
                 continue
 
             video_url = media.url
@@ -376,7 +376,7 @@ class MastodonEmailProcessor:
     def _factor_toot_attachments(self, toot):
         attachments = []
         for media in toot.media_attachments:
-            if media.type not in ('image', 'video'):
+            if media.type not in ('image', 'video', 'gifv'):
                 continue
 
             media_url = media.url if media.type == 'image' else media.preview_url
