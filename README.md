@@ -15,8 +15,10 @@ Toot2Mail requires Python 3.9 or newer.
 Clone the GIT repository and start the script `toot2mail.py`, ideally on a regular
 basis e.g. as cronjob.
 
-The following requirements must be installed:
-requests and requests-html.
+Dependencies:
+  - requests
+  - requests-html
+  - pillow (optionally to reduce the size of attached images)
 
 Before using Toot2Mail, you need to create a configuration file called `toot2mail.conf`.
 Toot2Mail will search for `toot2mail.conf` in the following locations (in that order):

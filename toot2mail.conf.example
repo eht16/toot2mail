@@ -9,6 +9,10 @@ timeline_limit=25
 state_file_path = toot2mail.state
 # lock file
 lock_file_path = toot2mail.lock
+# maximum image width and height for attached images, if any image dimension is higher than
+# these values, the image will be downscaled to the corresponding maximum
+# leave unset to not downscale images, format: WIDTH,HEIGHT
+image_maximum_size = 600,350
 # shorten the subject of the mail if the text is longer than this length
 mail_maximum_subject_length = 75
 # mail settings

@@ -14,6 +14,7 @@ from pathlib import Path
 from random import randint
 from time import sleep
 from urllib.parse import urljoin
+import io
 import json
 import logging
 import logging.handlers
@@ -23,6 +24,10 @@ import sys
 
 import requests
 import requests_html
+try:
+    from PIL import Image
+except ImportError:
+    Image = None  # skip image processing if pillow is missing
 
 
 CONFIG_FILENAME = '~/.config/toot2mail.conf'
@@ -119,6 +124,7 @@ class MastodonEmailProcessor:
         self._timeline_limit = None
         self._state_file_path = None
         self._lock_file_path = None
+        self._image_maximum_size = None
         self._mail_maximum_subject_length = None
         self._mail_from = None
         self._mail_recipient = None
@@ -171,6 +177,10 @@ class MastodonEmailProcessor:
         self._mail_recipient = config_parser.get('settings', 'mail_recipient')
         self._mail_server_hostname = config_parser.get('settings', 'mail_server_hostname')
         self._mail_server_port = config_parser.getint('settings', 'mail_server_port')
+
+        image_maximum_size = config_parser.get('settings', 'image_maximum_size', fallback=None)
+        if image_maximum_size:
+            self._image_maximum_size = [int(value) for value in image_maximum_size.split(',')]
 
         proxy = config_parser.get('settings', 'proxy')
         if proxy:
@@ -396,7 +406,30 @@ class MastodonEmailProcessor:
             self._logger.warning('Unable to download image "%s": %s', image_url, err)
             return None
         else:
-            return response.content
+            image_data = self._downscale_image(response.content)
+            return image_data
+
+    def _downscale_image(self, image_data):
+        if Image is None:  # pillow / PIL not installed
+            return image_data
+
+        if not self._image_maximum_size:
+            return image_data
+
+        max_width = self._image_maximum_size[0]
+        max_height = self._image_maximum_size[1]
+        try:
+            image_data_bytes = io.BytesIO(image_data)
+            image = Image.open(image_data_bytes)
+            if image.size[0] > max_width or image.size[1] > max_height:
+                image.thumbnail((max_width, max_height))
+                result = io.BytesIO()
+                image.save(result, image.format)
+                return result.getvalue()
+        except Exception as err:
+            self._logger.warning('Unable to downscale image: %s', err)
+
+        return image_data
 
     def _send_mail(self, mail_from, subject, message, date, files=None):
         if files:
