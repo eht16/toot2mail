@@ -429,7 +429,9 @@ class MastodonEmailProcessor:
     def _factor_mail_headers(self, toot):
         fqdn = socket.getfqdn()
         hostname = toot.get_hostname()
-        headers = {'Message-ID': f'<{toot.account.id}.{hostname}.{toot.id}@{fqdn}>'}
+        headers = {'X-Toot-URI': f'{toot.uri}',
+                   'X-Toot-Account': f'{toot.get_uid()}',
+                   'Message-ID': f'<{toot.account.id}.{hostname}.{toot.id}@{fqdn}>'}
         if toot.is_reply and toot.in_reply_to:
             in_reply_to_hostname = toot.in_reply_to.get_hostname()
             headers['In-Reply-To'] = f'<{toot.in_reply_to_account_id}.{in_reply_to_hostname}.' \
