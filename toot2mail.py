@@ -13,13 +13,14 @@ from email.utils import COMMASPACE, formatdate
 from pathlib import Path
 from random import randint
 from time import sleep
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 import io
 import json
 import logging
 import logging.handlers
 import os
 import smtplib
+import socket
 import sys
 
 import requests
@@ -68,20 +69,13 @@ class Toot(AttribAccessDict):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        self.in_reply_to = None
         self.is_reply = bool(self.in_reply_to_id)
         self.is_boost = bool(self.reblog)
 
     @property
     def content(self):
         return self.reblog.content if self.is_boost else self.get('content')
-
-    @property
-    def uri(self):
-        return self.reblog.uri if self.is_boost else self.get('uri')
-
-    @property
-    def url(self):
-        return self.reblog.url if self.is_boost else self.get('url')
 
     @property
     def card(self):
@@ -95,6 +89,18 @@ class Toot(AttribAccessDict):
     @property
     def account(self):
         return AttribAccessDict(self.get('account'))
+
+    def get_hostname(self):
+        parsed_url = urlsplit(self.url)
+        return parsed_url.netloc
+
+    def get_uid(self):
+        acct = self.account.acct
+        if '@' in acct:
+            return acct.lower()
+
+        username_lowercase = self.account.username.lower()
+        return f'{username_lowercase}@{self.get_hostname()}'
 
     def get_username(self, compound=True):
         if self.is_boost:
@@ -132,12 +138,8 @@ class MastodonEmailProcessor:
         self._mail_server_port = None
         self._logger = None
         self._usernames = None
-        self._username = None
-        self._hostname = None
-        self._username_exclude_replies = None
-        self._username_exclude_boosts = None
+        self._references = None
         self._toot_state = None
-        self._account_id_by_username = None
 
     def process(self):
         self._setup_config()
@@ -148,13 +150,9 @@ class MastodonEmailProcessor:
 
         self._read_toot_state()
         try:
-            for self._username, self._hostname, self._username_exclude_replies, \
-                    self._username_exclude_boosts in self._usernames:
-                self._process_user()
-                sleep(randint(5, 30))  # give the remote instance a little time
-        except Exception as exc:
-            self._logger.exception('An error occurred while processing "%s@%s": %s',
-                                   self._username, self._hostname, exc)
+            for username, hostname, exclude_replies, exclude_boosts in self._usernames:
+                self._process_user(username, hostname, exclude_replies, exclude_boosts)
+                sleep(randint(3, 10))  # give the remote instance a little time
         finally:
             self._write_toot_state()
             self._remove_lock()
@@ -226,68 +224,62 @@ class MastodonEmailProcessor:
     def _read_toot_state(self):
         if not self._state_file_path.exists():
             self._toot_state = {}
-            self._account_id_by_username = {}
         else:
             with open(self._state_file_path, encoding='utf-8') as state_file:
                 self._toot_state = json.load(state_file)
-            self._account_id_by_username = {user['username']: account_id
-                                            for account_id, user
-                                            in self._toot_state.items()}
 
-    def _process_user(self):
-        self._logger.info('Processing new toots for "%s@%s"', self._username, self._hostname)
+    def _process_user(self, username, hostname, exclude_replies, exclude_boosts):
+        try:
+            self._logger.info('Processing new toots for "%s@%s"', username, hostname)
 
-        toots = self._get_toots()
+            toots_count = 0
+            skipped_toots_count = 0
+            toots = self._get_toots(username, hostname)
+            for toot in toots:
+                if self._is_toot_already_processed(toot):
+                    skipped_toots_count += 1
+                    continue
 
-        # handle output
-        toots_count = 0
-        skipped_toots_count = 0
-        for toot in toots:
-            if self._is_toot_already_processed(toot):
-                skipped_toots_count += 1
-                continue
+                if exclude_replies and toot.is_reply:
+                    continue
+                if exclude_boosts and toot.is_boost:
+                    continue
 
-            if self._username_exclude_replies and toot.is_reply:
-                continue
-            if self._username_exclude_boosts and toot.is_boost:
-                continue
+                self._process_toot(toot, username, hostname)
+                toots_count += 1
 
-            self._process_toot(toot)
-            toots_count += 1
+            self._logger.info(
+                'Processed %s new toot(s) and skipped %s already processed toot(s) for "%s@%s"',
+                toots_count, skipped_toots_count, username, hostname)
+        except Exception as exc:
+            self._logger.exception('An error occurred while processing "%s@%s": %s',
+                                   username, hostname, exc)
 
-        self._logger.info(
-            'Processed %s new toot(s) and skipped %s already processed toot(s) for "%s@%s"',
-            toots_count, skipped_toots_count, self._username, self._hostname)
-
-    def _get_toots(self):
-        account_id = self._get_account_id()
+    def _get_toots(self, username, hostname):
+        account_id = self._get_account_id(username, hostname)
         url = f'api/v1/accounts/{account_id}/statuses'
-        toot_dicts = self._request(url, query_params={'limit': self._timeline_limit})
-        toots = []
-        for toot_dict in toot_dicts:
-            toot = Toot(toot_dict)
-            toots.append(toot)
-
+        toot_dicts = self._request(url, hostname, query_params={'limit': self._timeline_limit})
+        toots = [Toot(toot_dict) for toot_dict in toot_dicts]
         return toots
 
-    def _get_account_id(self):
-        uid = self._account_id_by_username.get(self._username)
-        if uid:
-            account_id = uid.split('@')[0]
+    def _get_account_id(self, username, hostname):
+        uid = f'{username}@{hostname}'
+        user = self._toot_state.get(uid)
+        if user:
+            account_id = user['account_id']
         else:
-            account = self._request('api/v1/accounts/lookup', query_params={'acct': self._username})
+            account = self._request('api/v1/accounts/lookup', hostname,
+                                    query_params={'acct': username})
             account_id = account['id']
-            uid = f'{account_id}@{self._hostname}'
-            self._toot_state[uid] = {'username': self._username, 'toots': []}
-            self._account_id_by_username[self._username] = (account_id, self._hostname)
+            self._toot_state[uid] = {'account_id': account_id, 'toots': []}
 
         return account_id
 
-    def _request(self, api_endpoint, query_params=None):
-        if not self._hostname:
+    def _request(self, api_endpoint, hostname, query_params=None):
+        if not hostname:
             raise ValueError('No Mastodon host set!')
 
-        url = urljoin(f'https://{self._hostname}', api_endpoint)
+        url = urljoin(f'https://{hostname}', api_endpoint)
         response = requests.get(url, params=query_params, proxies=self._proxies,
                                 timeout=self._timeout)
         response.raise_for_status()
@@ -296,47 +288,50 @@ class MastodonEmailProcessor:
         return response_json
 
     def _is_toot_already_processed(self, toot):
-        uid = self._get_uid(toot)
+        uid = toot.get_uid()
         user = self._toot_state.get(uid, {})
         user_toots = user.get('toots', [])
-        return bool(toot.id in user_toots)
+        return bool(toot.uri in user_toots)
 
-    def _process_toot(self, toot):
+    def _process_toot(self, toot, username, hostname):
+        self._references = set()
         try:
+            self._get_toot_in_reply_to(toot, hostname)
             mail_from = self._factor_mail_from(toot)
             subject = self._factor_mail_subject(toot)
-            message = self._factor_mail_message(toot)
+            message = self._factor_mail_message(toot, username)
             toot_timestamp = self._factor_toot_timestamp(toot)
             attachments = self._factor_toot_attachments(toot)
+            headers = self._factor_mail_headers(toot)
             # send the mail
-            self._send_mail(mail_from, subject, message, toot_timestamp, attachments)
+            self._send_mail(mail_from, subject, message, toot_timestamp, attachments, headers)
             # remember toot
             self._add_toot_to_toot_state(toot)
         except Exception as exc:
             self._logger.exception('An error occurred while processing "%s@%s" at toot %s: %s',
-                                   self._username, self._hostname, toot.id, exc)
+                                   username, toot.get_hostname(), toot.id, exc)
 
-    def _factor_mail_message(self, toot):
+    def _get_toot_in_reply_to(self, toot, hostname):
+        if toot.in_reply_to_id:
+            in_reply_to = self._request(f'api/v1/statuses/{toot.in_reply_to_id}', hostname)
+            if in_reply_to:
+                toot.in_reply_to = Toot(in_reply_to)
+                if not self._is_toot_already_processed(toot.in_reply_to):
+                    self._process_toot(toot.in_reply_to, toot.in_reply_to.account.username,
+                                       hostname)
+
+    def _factor_mail_message(self, toot, username):
         message = MAIL_MESSAGE_TEMPLATE.format(
             toot=self._html2text(toot.content),
-            username=self._username,
+            username=username,
             posted_by=toot.get_username(compound=False),
             boosted_by=toot.account.username if toot.is_boost else '-',
-            in_reply_to_url=self._get_in_reply_to_url(toot),
+            in_reply_to_url=toot.in_reply_to.url if toot.is_reply else '-',
             videos=self._factor_video_list(toot),
             card=self._factor_card(toot),
-            url=toot.url,
-            hostname=self._hostname)
+            url=toot.reblog.url if toot.is_boost else toot.url,
+            hostname=toot.get_hostname())
         return message
-
-    def _get_in_reply_to_url(self, toot):
-        reply_to_id = toot.in_reply_to_id
-        if reply_to_id:
-            replied_toot = self._request(f'api/v1/statuses/{reply_to_id}')
-            if replied_toot:
-                return replied_toot['url']
-
-        return '-'
 
     def _factor_video_list(self, toot):
         videos = ''
@@ -386,7 +381,7 @@ class MastodonEmailProcessor:
     def _factor_toot_attachments(self, toot):
         attachments = []
         for media in toot.media_attachments:
-            if media.type not in ('image', 'video', 'gifv'):
+            if media.type not in ('gifv', 'image', 'video'):
                 continue
 
             media_url = media.url if media.type == 'image' else media.preview_url
@@ -431,7 +426,18 @@ class MastodonEmailProcessor:
 
         return image_data
 
-    def _send_mail(self, mail_from, subject, message, date, files=None):
+    def _factor_mail_headers(self, toot):
+        fqdn = socket.getfqdn()
+        hostname = toot.get_hostname()
+        headers = {'Message-ID': f'<{toot.account.id}.{hostname}.{toot.id}@{fqdn}>'}
+        if toot.is_reply and toot.in_reply_to:
+            in_reply_to_hostname = toot.in_reply_to.get_hostname()
+            headers['In-Reply-To'] = f'<{toot.in_reply_to_account_id}.{in_reply_to_hostname}.' \
+                                     f'{toot.in_reply_to.id}@{fqdn}>'
+
+        return headers
+
+    def _send_mail(self, mail_from, subject, message, date, files=None, headers=None):
         if files:
             msg = MIMEMultipart()
             msg.attach(MIMEText(message))
@@ -452,19 +458,18 @@ class MastodonEmailProcessor:
         msg['To'] = COMMASPACE.join(recipients)
         msg['Date'] = formatdate(date)
         msg['Subject'] = subject
+        if headers is not None:
+            for key, value in headers.items():
+                msg.add_header(key, value)
 
         smtp = smtplib.SMTP(self._mail_server_hostname, self._mail_server_port)
         smtp.sendmail(self._mail_recipient, recipients, msg.as_string())
         smtp.quit()
 
     def _add_toot_to_toot_state(self, toot):
-        uid = self._get_uid(toot)
-        user = self._toot_state.setdefault(uid, {'toots': []})
-        user['toots'].append(toot.id)
-
-    def _get_uid(self, toot):
-        account_id = toot.account.id
-        return f'{account_id}@{self._hostname}'
+        uid = toot.get_uid()
+        user = self._toot_state.setdefault(uid, {'account_id': toot.account.id, 'toots': []})
+        user['toots'].append(toot.uri)
 
     def _write_toot_state(self):
         with open(self._state_file_path, 'w', encoding='utf-8') as state_file:
