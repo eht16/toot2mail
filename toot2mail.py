@@ -23,8 +23,8 @@ import smtplib
 import socket
 import sys
 
+import markdownify
 import requests
-import requests_html
 try:
     from PIL import Image
 except ImportError:
@@ -368,7 +368,8 @@ class MastodonEmailProcessor:
         if not html:
             return html
 
-        return requests_html.HTML(html=html).text
+        return markdownify.markdownify(html, strip=['a'],
+                                       escape_asterisks=False, escape_underscores=False).strip()
 
     def _factor_toot_timestamp(self, toot):
         toot_created_at = toot.created_at
