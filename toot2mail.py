@@ -346,7 +346,17 @@ class MastodonEmailProcessor:
 
     def _get_toot_in_reply_to(self, toot, hostname):
         if toot.in_reply_to_id:
-            in_reply_to = self._request(f'api/v1/statuses/{toot.in_reply_to_id}', hostname)
+            try:
+                in_reply_to = self._request(f'api/v1/statuses/{toot.in_reply_to_id}', hostname)
+            except requests.exceptions.HTTPError as exc:
+                # ignore 404 errors, sometimes toots might get deleted
+                if exc.response.status_code == 404:
+                    self._logger.info('Toot reply "%s" could not be found on server (404): %s',
+                                      toot.in_reply_to_id, exc)
+                    return None
+                # raise for all other errors
+                raise
+
             if in_reply_to:
                 toot.in_reply_to = Toot(in_reply_to)
                 if not self._is_toot_already_processed(toot.in_reply_to):
