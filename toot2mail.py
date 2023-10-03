@@ -138,6 +138,7 @@ class MastodonEmailProcessor:
         self._mail_server_port = None
         self._logger = None
         self._usernames = None
+        self._hashtags = None
         self._references = None
         self._toot_state = None
 
@@ -152,7 +153,10 @@ class MastodonEmailProcessor:
         try:
             for username, hostname, exclude_replies, exclude_boosts in self._usernames:
                 self._process_user(username, hostname, exclude_replies, exclude_boosts)
-                sleep(randint(3, 10))  # give the remote instance a little time
+                self._pause()
+            for hashtag, hostname in self._hashtags:
+                self._process_hashtag(hashtag, hostname)
+                self._pause()
         finally:
             self._write_toot_state()
             self._remove_lock()
@@ -193,6 +197,11 @@ class MastodonEmailProcessor:
             exclude_replies = 'noreplies' in flags
             exclude_boosts = 'noboosts' in flags
             self._usernames.append((username, hostname, exclude_replies, exclude_boosts))
+
+        self._hashtags = []
+        for uid, flags in config_parser.items('hashtags'):
+            hashtag, hostname = uid.split('@')
+            self._hashtags.append((hashtag, hostname))
 
     def _setup_logger(self):
         me = Path(__file__).name
@@ -473,6 +482,40 @@ class MastodonEmailProcessor:
         uid = toot.get_uid()
         user = self._toot_state.setdefault(uid, {'account_id': toot.account.id, 'toots': []})
         user['toots'].append(toot.uri)
+
+    def _process_hashtag(self, hashtag, hostname):
+        try:
+            self._logger.info('Processing new toots for "#%s@%s"', hashtag, hostname)
+
+            toots_count = 0
+            skipped_toots_count = 0
+            toots = self._get_toots_for_hashtag(hashtag, hostname)
+            for toot in toots:
+                if self._is_toot_already_processed(toot):
+                    skipped_toots_count += 1
+                    continue
+
+                self._process_toot(toot, None, hostname)
+                toots_count += 1
+
+            self._logger.info(
+                'Processed %s new toot(s) and skipped %s already processed toot(s) for "#%s@%s"',
+                toots_count, skipped_toots_count, hashtag, hostname)
+        except TimeoutError as exc:
+            self._logger.warning('An error occurred while processing "#%s@%s": %s',
+                                 hashtag, hostname, exc)
+        except Exception as exc:
+            self._logger.exception('An error occurred while processing "#%s@%s": %s',
+                                   hashtag, hostname, exc)
+
+    def _get_toots_for_hashtag(self, hashtag, hostname):
+        url = f'api/v1/timelines/tag/{hashtag}'
+        toot_dicts = self._request(url, hostname, query_params={'limit': self._timeline_limit})
+        toots = [Toot(toot_dict) for toot_dict in toot_dicts]
+        return toots
+
+    def _pause(self):
+        sleep(randint(3, 10))
 
     def _write_toot_state(self):
         with open(self._state_file_path, 'w', encoding='utf-8') as state_file:

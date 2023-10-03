@@ -2,7 +2,7 @@
 
 Generate notification emails from Mastodon toots.
 
-Configure Mastodon accounts you want to follow and receive notification
+Configure Mastodon accounts and hashtags you want to follow and receive notification
 emails for toots in the monitored accounts.
 
 This can be used to passively follow Mastodon accounts without having to subscribe yourself.

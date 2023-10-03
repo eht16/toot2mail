@@ -27,3 +27,7 @@ alice@example.com
 bob@example.com
 jane@example.social = noboosts
 john@example.social = noboosts,noreplies
+
+[hashtags]
+# format: hashtag@instance, the leading hash (#) must be omitted
+hashtag@example.social
