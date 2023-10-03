@@ -111,6 +111,17 @@ class Toot(AttribAccessDict):
 
         return self.account.username
 
+    def get_display_name(self, compound=True):
+        display_name = self.account.display_name or self.account.username
+        if self.is_boost:
+            if compound:
+                reblog_display_name = self.reblog.account.display_name or self.reblog.account.username
+                return f'{display_name}: {reblog_display_name}'
+
+            return display_name
+
+        return display_name
+
     @property
     def media_attachments(self):
         if self.is_boost and self.reblog.media_attachments:
@@ -330,12 +341,20 @@ class MastodonEmailProcessor:
                                        hostname)
 
     def _factor_mail_message(self, toot, username):
+        posted_by_username = toot.get_username(compound=False)
+        posted_by_display_name = toot.get_display_name(compound=False)
+        posted_by = f'{posted_by_display_name} (@{posted_by_username})'
+
+        if toot.is_boost:
+            boosted_by = f'{toot.account.display_name} (@{toot.account.username})'
+        else:
+
         message = MAIL_MESSAGE_TEMPLATE.format(
             toot=self._html2text(toot.content),
             username=username,
-            posted_by=toot.get_username(compound=False),
-            boosted_by=toot.account.username if toot.is_boost else '-',
-            in_reply_to_url=toot.in_reply_to.url if toot.is_reply else '-',
+            posted_by=posted_by,
+            boosted_by=boosted_by,
+            in_reply_to_url=toot.in_reply_to.url if toot.is_reply and toot.in_reply_to else '-',
             videos=self._factor_video_list(toot),
             card=self._factor_card(toot),
             url=toot.reblog.url if toot.is_boost else toot.url,
@@ -361,7 +380,7 @@ class MastodonEmailProcessor:
         return ''
 
     def _factor_mail_from(self, toot):
-        encoded_name = Header(toot.get_username(), 'utf-8').encode()
+        encoded_name = Header(toot.get_display_name(), 'utf-8').encode()
         return f'{encoded_name} <{self._mail_from}>'
 
     def _factor_mail_subject(self, toot):
