@@ -94,7 +94,8 @@ class Toot(AttribAccessDict):
 
     @property
     def account(self):
-        return AttribAccessDict(self.get('account'))
+        account = self.get('account')
+        return AttribAccessDict(account or {})
 
     def get_hostname(self):
         parsed_url = urlsplit(self.url)
@@ -300,17 +301,8 @@ class MastodonEmailProcessor:
         return toots
 
     def _get_account_id(self, username, hostname):
-        uid = f'{username}@{hostname}'
-        user = self._toot_state.get(uid)
-        if user:
-            account_id = user['account_id']
-        else:
-            account = self._request('api/v1/accounts/lookup', hostname,
-                                    query_params={'acct': username})
-            account_id = account['id']
-            self._toot_state[uid] = {'account_id': account_id, 'toots': []}
-
-        return account_id
+        account = self._request('api/v1/accounts/lookup', hostname, query_params={'acct': username})
+        return account['id']
 
     def _request(self, api_endpoint, hostname, query_params=None):
         if not hostname:
@@ -345,7 +337,7 @@ class MastodonEmailProcessor:
             self._get_toot_in_reply_to(toot, hostname)
             mail_from = self._factor_mail_from(toot)
             subject = self._factor_mail_subject(toot)
-            message = self._factor_mail_message(toot, username)
+            message = self._factor_mail_message(toot)
             toot_timestamp = self._factor_toot_timestamp(toot)
             attachments = self._factor_toot_attachments(toot)
             headers = self._factor_mail_headers(toot)
@@ -358,7 +350,7 @@ class MastodonEmailProcessor:
             if self._is_exception_timeout(exc):
                 log_func = self._logger.warning
             log_func('An error occurred while processing "%s@%s" at toot %s: %s',
-                     username, toot.get_hostname(), toot.id, exc)
+                     toot.account.username, toot.get_hostname(), toot.id, exc)
 
     def _get_toot_in_reply_to(self, toot, hostname):
         if toot.in_reply_to_id:
@@ -379,7 +371,7 @@ class MastodonEmailProcessor:
                     self._process_toot(toot.in_reply_to, toot.in_reply_to.account.username,
                                        hostname)
 
-    def _factor_mail_message(self, toot, username):
+    def _factor_mail_message(self, toot):
         posted_by_username = toot.get_username(compound=False)
         posted_by_display_name = toot.get_display_name(compound=False)
         posted_by = f'{posted_by_display_name} (@{posted_by_username})'
@@ -398,7 +390,7 @@ class MastodonEmailProcessor:
 
         message = MAIL_MESSAGE_TEMPLATE.format(
             toot=self._html2text(toot.content),
-            username=username,
+            username=toot.account.username,
             posted_by=posted_by,
             boosted_by=boosted_by,
             in_reply_to_url=toot.in_reply_to.url if toot.is_reply and toot.in_reply_to else '-',
@@ -544,11 +536,11 @@ class MastodonEmailProcessor:
         hostname = toot.get_hostname()
         headers = {'X-Toot-URI': f'{toot.uri}',
                    'X-Toot-Account': f'{toot.get_uid()}',
-                   'Message-ID': f'<{toot.account.id}.{hostname}.{toot.id}@{fqdn}>'}
+                   'Message-ID': f'<{toot.account.username}.{hostname}.{toot.id}@{fqdn}>'}
         if toot.is_reply and toot.in_reply_to:
             in_reply_to_hostname = toot.in_reply_to.get_hostname()
-            headers['In-Reply-To'] = f'<{toot.in_reply_to_account_id}.{in_reply_to_hostname}.' \
-                                     f'{toot.in_reply_to.id}@{fqdn}>'
+            headers['In-Reply-To'] = f'<{toot.in_reply_to.account.username}.{in_reply_to_hostname}.' \
+                                    f'{toot.in_reply_to.id}@{fqdn}>'
 
         return headers
 
@@ -584,7 +576,7 @@ class MastodonEmailProcessor:
     def _add_toot_to_toot_state(self, toot):
         uid = toot.get_uid()
         toot_uri = toot.uri.lower()
-        user = self._toot_state.setdefault(uid, {'account_id': toot.account.id, 'toots': []})
+        user = self._toot_state.setdefault(uid, {'toots': []})
         user['toots'].append(toot_uri)
 
     def _process_hashtag(self, hashtag, hostname):
