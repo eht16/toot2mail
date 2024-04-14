@@ -634,7 +634,7 @@ class MastodonEmailProcessor:
             log_func = self._logger.exception
             if self._is_exception_timeout(exc):
                 log_func = self._logger.warning
-            log_func('An error occurred while processing "%s@%s": %s', hashtag, hostname, exc)
+            log_func('An error occurred while processing "#%s@%s": %s', hashtag, hostname, exc)
 
     def _get_toots_for_hashtag(self, hashtag, hostname):
         url = f'api/v1/timelines/tag/{hashtag}'
