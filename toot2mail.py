@@ -31,6 +31,7 @@ except ImportError:
     Image = None  # skip image processing if pillow is missing
 
 
+HTTP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; rv:123.0) Gecko/20100101 Firefox/123.0'
 CONFIG_FILENAME = '~/.config/toot2mail.conf'
 MAIL_MESSAGE_TEMPLATE = '''{toot}
 
@@ -310,7 +311,8 @@ class MastodonEmailProcessor:
 
         url = urljoin(f'https://{hostname}', api_endpoint)
         response = requests.get(url, params=query_params, proxies=self._proxies,
-                                timeout=self._timeout)
+                                timeout=self._timeout,
+                                headers= {'User-Agent': HTTP_USER_AGENT})
         response.raise_for_status()
 
         response_json = response.json()
@@ -447,7 +449,9 @@ class MastodonEmailProcessor:
     def _get_image(self, image_url):
         self._logger.info('Retrieve image "%s"', image_url)
         try:
-            response = requests.get(image_url, proxies=self._proxies, timeout=self._timeout)
+            response = requests.get(image_url, proxies=self._proxies, timeout=self._timeout,
+                                    headers= {'User-Agent': HTTP_USER_AGENT})
+
             response.raise_for_status()
         except requests.exceptions.HTTPError as err:
             self._logger.warning('Unable to download image "%s": %s', image_url, err)
