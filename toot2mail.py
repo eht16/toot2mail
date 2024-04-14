@@ -431,6 +431,14 @@ class MastodonEmailProcessor:
 
     def _factor_toot_attachments(self, toot):
         attachments = []
+        # card image
+        card = toot.card
+        if card and card.image:
+            file_name = f'card_{Path(card.image).name}'
+            file_name, file_content = self._get_image(card.image, file_name)
+            attachments.append((file_name, file_content))
+
+        # media attachments
         for media in toot.media_attachments:
             if media.type not in ('gifv', 'image', 'video'):
                 continue
