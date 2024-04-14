@@ -106,7 +106,8 @@ class Toot(AttribAccessDict):
             return acct.lower()
 
         username_lowercase = self.account.username.lower()
-        return f'{username_lowercase}@{self.get_hostname()}'
+        hostname_lowercase = self.get_hostname().lower()
+        return f'{username_lowercase}@{hostname_lowercase}'
 
     def get_username(self, compound=True):
         if self.is_boost:
@@ -325,9 +326,10 @@ class MastodonEmailProcessor:
 
     def _is_toot_already_processed(self, toot):
         uid = toot.get_uid()
+        toot_uri = toot.uri.lower()
         user = self._toot_state.get(uid, {})
         user_toots = user.get('toots', [])
-        return bool(toot.uri in user_toots)
+        return bool(toot_uri in user_toots)
 
     def _process_toot(self, toot, username, hostname):
         self._references = set()
@@ -574,8 +576,9 @@ class MastodonEmailProcessor:
 
     def _add_toot_to_toot_state(self, toot):
         uid = toot.get_uid()
+        toot_uri = toot.uri.lower()
         user = self._toot_state.setdefault(uid, {'account_id': toot.account.id, 'toots': []})
-        user['toots'].append(toot.uri)
+        user['toots'].append(toot_uri)
 
     def _process_hashtag(self, hashtag, hostname):
         try:
