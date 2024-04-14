@@ -18,7 +18,7 @@ basis e.g. as cronjob.
 Dependencies:
   - requests
   - markdownify
-  - pillow (optionally to reduce the size of attached images)
+  - pillow
 
 Before using Toot2Mail, you need to create a configuration file called `toot2mail.conf`.
 Toot2Mail will search for `toot2mail.conf` in the following locations (in that order):

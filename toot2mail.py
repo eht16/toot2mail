@@ -22,14 +22,11 @@ import os
 import smtplib
 import socket
 import sys
+import textwrap
 
 import markdownify
 import requests
-try:
-    from PIL import Image
-except ImportError:
-    Image = None  # skip image processing if pillow is missing
-
+from PIL import Image, ImageDraw
 
 HTTP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; rv:123.0) Gecko/20100101 Firefox/123.0'
 CONFIG_FILENAME = '~/.config/toot2mail.conf'
@@ -441,12 +438,12 @@ class MastodonEmailProcessor:
             media_url = media.url if media.type == 'image' else media.preview_url
 
             file_name = Path(media_url).name
-            file_content = self._get_image(media_url)
+            file_name, file_content = self._get_image(media_url, file_name)
             attachments.append((file_name, file_content))
 
         return attachments
 
-    def _get_image(self, image_url):
+    def _get_image(self, image_url, file_name):
         self._logger.info('Retrieve image "%s"', image_url)
         try:
             response = requests.get(image_url, proxies=self._proxies, timeout=self._timeout,
@@ -454,11 +451,36 @@ class MastodonEmailProcessor:
 
             response.raise_for_status()
         except requests.exceptions.HTTPError as err:
-            self._logger.warning('Unable to download image "%s": %s', image_url, err)
-            return None
+            msg = f'Unable to download image "{image_url}": {err}'
+            self._logger.warning(msg)
+            # generate an image containing the error message to indicate there was
+            # an image which could not be loaded
+            image_data = self._generate_download_error_image(msg)
+            file_name = f'{file_name}.png'
         else:
             image_data = self._downscale_image(response.content)
-            return image_data
+
+        return file_name, image_data
+
+    def _generate_download_error_image(self, text):
+        if self._image_maximum_size:
+            width = self._image_maximum_size[0]
+            height = self._image_maximum_size[1]
+        else:
+            width = 500
+            height = 300
+
+        max_text_width = int(width / 10)
+        wrapped_text = textwrap.wrap(text, width=max_text_width)
+
+        image = Image.new(mode="RGB", size=(width, height), color='lightgrey')
+        draw = ImageDraw.Draw(image)
+        for i, line in enumerate(wrapped_text):
+            draw.text((25, 25 + (i * 20)), line, fill='black')
+
+        result = io.BytesIO()
+        image.save(result, 'PNG')
+        return result.getvalue()
 
     def _downscale_image(self, image_data):
         if Image is None:  # pillow / PIL not installed
