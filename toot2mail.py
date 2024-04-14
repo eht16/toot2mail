@@ -37,9 +37,12 @@ MAIL_MESSAGE_TEMPLATE = '''{toot}
 Videos: {videos}
 Posted by: {posted_by}
 Boosted by: {boosted_by}
+Application: {application}
+
 In Reply To: {in_reply_to_url}
 URL: {url}
 Timeline: https://{hostname}/@{username}/with_replies
+Toot ID: {toot_id}
 '''
 
 CARD_TEMPLATE = '''
@@ -70,6 +73,11 @@ class Toot(AttribAccessDict):
         self.in_reply_to = None
         self.is_reply = bool(self.in_reply_to_id)
         self.is_boost = bool(self.reblog)
+
+    @property
+    def application(self):
+        application = self.get('application')
+        return AttribAccessDict(application or {})
 
     @property
     def content(self):
@@ -370,6 +378,14 @@ class MastodonEmailProcessor:
         if toot.is_boost:
             boosted_by = f'{toot.account.display_name} (@{toot.account.username})'
         else:
+            pass
+
+        if toot.application:
+            application = f'{toot.application.name}'
+            if toot.application.website:
+                application = f'{application} ({toot.application.website})'
+        else:
+            application = '-'
 
         message = MAIL_MESSAGE_TEMPLATE.format(
             toot=self._html2text(toot.content),
@@ -380,6 +396,8 @@ class MastodonEmailProcessor:
             videos=self._factor_video_list(toot),
             card=self._factor_card(toot),
             url=toot.reblog.url if toot.is_boost else toot.url,
+            toot_id=toot.id,
+            application=application,
             hostname=toot.get_hostname())
         return message
 
