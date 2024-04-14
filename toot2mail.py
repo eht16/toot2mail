@@ -280,7 +280,7 @@ class MastodonEmailProcessor:
                 if exclude_boosts and toot.is_boost:
                     continue
 
-                self._process_toot(toot, username, hostname)
+                self._process_toot(toot)
                 toots_count += 1
 
             self._logger.info(
@@ -336,13 +336,13 @@ class MastodonEmailProcessor:
         user_toots = user.get('toots', [])
         return bool(toot_uri in user_toots)
 
-    def _process_toot(self, toot, username, hostname):
+    def _process_toot(self, toot):
         self._references = set()
         try:
             # re-request the toot from the originating instance to get their account and status ids
-            toot, _ = self._get_original_toot(toot)
+            toot = self._get_original_toot(toot)
 
-            self._get_toot_in_reply_to(toot, hostname)
+            self._get_toot_in_reply_to(toot)
             mail_from = self._factor_mail_from(toot)
             subject = self._factor_mail_subject(toot)
             message = self._factor_mail_message(toot)
@@ -368,7 +368,7 @@ class MastodonEmailProcessor:
 
         try:
             new_toot = self._request(f'api/v1/statuses/{originating_toot_id}', originating_hostname)
-            return Toot(new_toot, boosted_by_toot=toot.boosted_by_toot), originating_hostname
+            return Toot(new_toot)
         except (urllib3.exceptions.MaxRetryError, requests.exceptions.ProxyError) as exc:
             self._logger.info('Originating toot with ID "%s" on instance "%s" could'
                               'not be retrieved: %s',
@@ -383,26 +383,28 @@ class MastodonEmailProcessor:
             else:
                 raise
 
-        return toot, None
+        return toot
 
-    def _get_toot_in_reply_to(self, toot, hostname):
+    def _get_toot_in_reply_to(self, toot):
         if toot.in_reply_to_id:
             try:
-                in_reply_to = self._request(f'api/v1/statuses/{toot.in_reply_to_id}', hostname)
+                in_reply_to = self._request(f'api/v1/statuses/{toot.in_reply_to_id}', toot.get_hostname())
             except requests.exceptions.HTTPError as exc:
                 # ignore 404 errors, sometimes toots might get deleted
                 if exc.response.status_code == 404:
                     self._logger.info('Toot reply "%s" could not be found on server (404): %s',
                                       toot.in_reply_to_id, exc)
-                    return None
+                    return
                 # raise for all other errors
                 raise
 
             if in_reply_to:
                 toot.in_reply_to = Toot(in_reply_to)
+                # re-request the toot from the originating instance to get account and status ids
+                toot.in_reply_to = self._get_original_toot(toot.in_reply_to)
+
                 if not self._is_toot_already_processed(toot.in_reply_to):
-                    self._process_toot(toot.in_reply_to, toot.in_reply_to.account.username,
-                                       hostname)
+                    self._process_toot(toot.in_reply_to)
 
     def _factor_mail_message(self, toot):
         posted_by_username = toot.get_username(compound=False)
@@ -624,7 +626,7 @@ class MastodonEmailProcessor:
                     skipped_toots_count += 1
                     continue
 
-                self._process_toot(toot, None, hostname)
+                self._process_toot(toot)
                 toots_count += 1
 
             self._logger.info(
