@@ -81,7 +81,12 @@ class Toot(AttribAccessDict):
 
     @property
     def content(self):
-        return self.reblog.content if self.is_boost else self.get('content')
+        content = self.get('content')
+        spoiler_text = self.get('spoiler_text')
+        if spoiler_text:
+            return f'{spoiler_text}\n\n{content}'
+
+        return content
 
     @property
     def card(self):
