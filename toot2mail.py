@@ -159,6 +159,7 @@ class MastodonEmailProcessor:
         self._hashtags = None
         self._references = None
         self._toot_state = None
+        self._cache = {}  # simple local instance cache for HTTP requests
 
     def process(self):
         self._setup_config()
@@ -315,6 +316,11 @@ class MastodonEmailProcessor:
         if not hostname:
             raise ValueError('No Mastodon host set!')
 
+        cache_key = (hostname, api_endpoint, str(query_params))
+        result = self._cache.get(cache_key, '__no_cache_result__')
+        if result != '__no_cache_result__':
+            return result
+
         url = urljoin(f'https://{hostname}', api_endpoint)
         response = requests.get(url, params=query_params, proxies=self._proxies,
                                 timeout=self._timeout,
@@ -322,6 +328,7 @@ class MastodonEmailProcessor:
         response.raise_for_status()
 
         response_json = response.json()
+        self._cache[cache_key] = response_json
         return response_json
 
     def _is_toot_already_processed(self, toot):
