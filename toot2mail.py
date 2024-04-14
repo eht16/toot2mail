@@ -23,6 +23,7 @@ import smtplib
 import socket
 import sys
 import textwrap
+import urllib3
 
 import markdownify
 import requests
@@ -338,7 +339,9 @@ class MastodonEmailProcessor:
     def _process_toot(self, toot, username, hostname):
         self._references = set()
         try:
-            username = username or toot.get_username(compound=False)
+            # re-request the toot from the originating instance to get their account and status ids
+            toot, _ = self._get_original_toot(toot)
+
             self._get_toot_in_reply_to(toot, hostname)
             mail_from = self._factor_mail_from(toot)
             subject = self._factor_mail_subject(toot)
@@ -356,6 +359,31 @@ class MastodonEmailProcessor:
                 log_func = self._logger.warning
             log_func('An error occurred while processing "%s@%s" at toot %s: %s',
                      toot.account.username, toot.get_hostname(), toot.id, exc)
+
+    def _get_original_toot(self, toot):
+        parsed_url = urlsplit(toot.url)
+        originating_hostname = parsed_url.netloc
+        # this probably won't work for other services than Mastodon
+        originating_toot_id = parsed_url.path.split('/')[-1]  # TODO make this robust
+
+        try:
+            new_toot = self._request(f'api/v1/statuses/{originating_toot_id}', originating_hostname)
+            return Toot(new_toot, boosted_by_toot=toot.boosted_by_toot), originating_hostname
+        except (urllib3.exceptions.MaxRetryError, requests.exceptions.ProxyError) as exc:
+            self._logger.info('Originating toot with ID "%s" on instance "%s" could'
+                              'not be retrieved: %s',
+                              originating_toot_id, originating_hostname, exc)
+        except requests.exceptions.HTTPError as exc:
+            # ignore errors and fall back to the previously retrieved instance local toot
+            if exc.response.status_code in (403, 404):
+                self._logger.info('Originating toot with ID "%s" on instance "%s" could '
+                                  'not be retrieved (%s): %s',
+                                  originating_toot_id, originating_hostname,
+                                  exc.response.status_code, exc)
+            else:
+                raise
+
+        return toot, None
 
     def _get_toot_in_reply_to(self, toot, hostname):
         if toot.in_reply_to_id:
