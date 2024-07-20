@@ -3,6 +3,7 @@
 # This software may be modified and distributed under the terms
 # of the MIT license.  See the LICENSE file for details.
 
+from argparse import ArgumentParser
 from configparser import ConfigParser
 from datetime import datetime
 from email.header import Header
@@ -170,7 +171,7 @@ class MastodonEmailProcessor:
         self._content_replacements = {}
         self._cache = {}  # simple local instance cache for HTTP requests
 
-    def process(self):
+    def process(self, toot_reference=None, tag_reference=None, user_reference=None):
         self._setup_config()
         self._setup_logger()
         self._log_hello()
@@ -179,12 +180,21 @@ class MastodonEmailProcessor:
 
         self._read_toot_state()
         try:
-            for username, hostname, exclude_replies, exclude_boosts in self._usernames:
-                self._process_user(username, hostname, exclude_replies, exclude_boosts)
-                self._pause()
-            for hashtag, hostname in self._hashtags:
+            if toot_reference:
+                self._process_single_toot(toot_reference)
+            elif tag_reference:
+                hashtag, hostname = tag_reference.split('@')
                 self._process_hashtag(hashtag, hostname)
-                self._pause()
+            elif user_reference:
+                username, hostname = user_reference.split('@')
+                self._process_user(username, hostname, False, False)
+            else:
+                for username, hostname, exclude_replies, exclude_boosts in self._usernames:
+                    self._process_user(username, hostname, exclude_replies, exclude_boosts)
+                    self._pause()
+                for hashtag, hostname in self._hashtags:
+                    self._process_hashtag(hashtag, hostname)
+                    self._pause()
         finally:
             self._write_toot_state()
             self._remove_lock()
@@ -267,6 +277,13 @@ class MastodonEmailProcessor:
         else:
             with open(self._state_file_path, encoding='utf-8') as state_file:
                 self._toot_state = json.load(state_file)
+
+    def _process_single_toot(self, toot_reference):
+        toot_id, hostname = toot_reference.split('@')
+        toot_dict = self._request(f'api/v1/statuses/{toot_id}', hostname)
+        toot = Toot(toot_dict)
+        self._process_toot(toot)
+        self._logger.info('Processed toot(s) for %s@%s', toot.id, toot.get_hostname())
 
     def _process_user(self, username, hostname, exclude_replies, exclude_boosts):
         try:
@@ -594,7 +611,7 @@ class MastodonEmailProcessor:
         if toot.is_reply and toot.in_reply_to:
             in_reply_to_hostname = toot.in_reply_to.get_hostname()
             headers['In-Reply-To'] = f'<{toot.in_reply_to.account.username}.{in_reply_to_hostname}.' \
-                                    f'{toot.in_reply_to.id}@{fqdn}>'
+                                     f'{toot.in_reply_to.id}@{fqdn}>'
 
         return headers
 
@@ -675,8 +692,19 @@ class MastodonEmailProcessor:
 
 
 def main():
+    argument_parser = ArgumentParser()
+    exclusive_group = argument_parser.add_mutually_exclusive_group()
+    exclusive_group.add_argument('-s', '--toot', dest='toot_reference',
+                                 help='Process a single Toot, specified as <id>@<instance.tld>')
+    exclusive_group.add_argument('-t', '--tag', dest='tag',
+                                 help='Process a given tag, specified as <tag>@<instance.tld>')
+    exclusive_group.add_argument('-u', '--user', dest='user',
+                                 help='Process a given user, specified as <user>@<instance.tld>')
+    arguments = argument_parser.parse_args()
+
     processor = MastodonEmailProcessor()
-    processor.process()
+    processor.process(toot_reference=arguments.toot_reference, tag_reference=arguments.tag,
+                      user_reference=arguments.user)
 
 
 if __name__ == '__main__':
