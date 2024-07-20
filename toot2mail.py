@@ -50,7 +50,7 @@ Toot ID: {toot_id}
 
 CARD_TEMPLATE = '''
 --------------------------------
-Card URL:   {card_url}:
+Card URL:   {card_url}
 Card Title: {card_title}'''
 
 
@@ -87,7 +87,12 @@ class Toot(AttribAccessDict):
 
         self.in_reply_to = None
         self.is_reply = bool(self.in_reply_to_id)
-        self.is_boost = bool(self.reblog)
+
+        self.setdefault('boosted_by_toot', None)
+        if bool(self.get('reblog')):
+            self.is_boost = True
+        else:
+            self.is_boost = False
 
     @property
     def application(self):
@@ -105,12 +110,8 @@ class Toot(AttribAccessDict):
 
     @property
     def card(self):
-        card = self.reblog.card if self.is_boost else self.get('card')
+        card = self.get('card')
         return AttribAccessDict(card or {})
-
-    @property
-    def reblog(self):
-        return Toot(self.get('reblog') or {})
 
     @property
     def account(self):
@@ -131,32 +132,25 @@ class Toot(AttribAccessDict):
         return f'{username_lowercase}@{hostname_lowercase}'
 
     def get_username(self, compound=True):
-        if self.is_boost:
+        if self.boosted_by_toot is not None:
             if compound:
-                return f'{self.account.username}: {self.reblog.account.username}'
-
-            return self.reblog.account.username
+                return f'{self.boosted_by_toot.account.username}: {self.account.username}'
 
         return self.account.username
 
     def get_display_name(self, compound=True):
         display_name = self.account.display_name or self.account.username
-        if self.is_boost:
+        if self.boosted_by_toot is not None:
+            boosted_by = self.boosted_by_toot
+            boosted_by_display_name = boosted_by.account.display_name or boosted_by.account.username
             if compound:
-                reblog_display_name = self.reblog.account.display_name or self.reblog.account.username
-                return f'{display_name}: {reblog_display_name}'
-
-            return display_name
+                return f'{boosted_by_display_name}: {display_name}'
 
         return display_name
 
     @property
     def media_attachments(self):
-        if self.is_boost and self.reblog.media_attachments:
-            media_attachments = self.reblog.media_attachments
-        else:
-            media_attachments = self.get('media_attachments') or []
-
+        media_attachments = self.get('media_attachments') or []
         return [AttribAccessDict(media_attachment) for media_attachment in media_attachments]
 
 
@@ -314,8 +308,9 @@ class MastodonEmailProcessor:
                 if exclude_boosts and toot.is_boost:
                     continue
 
-                self._process_toot(toot)
-                toots_count += 1
+                processed = self._process_toot(toot)
+                if processed:
+                    toots_count += 1
 
             self._logger.info(
                 'Processed %s new toot(s) and skipped %s already processed toot(s) for "%s@%s"',
@@ -378,8 +373,15 @@ class MastodonEmailProcessor:
     def _process_toot(self, toot):
         self._references = set()
         try:
+            toot = self._get_toot_reblog(toot)
+
             # re-request the toot from the originating instance to get their account and status ids
             toot = self._get_original_toot(toot)
+
+            # since we may have another toot to process here (after processing boosts),
+            # check again if it was processed already - this may happen if users boost the same toot
+            if self._is_toot_already_processed(toot):
+                return False
 
             self._get_toot_in_reply_to(toot)
             text_content = self._factor_text_content(toot)
@@ -399,6 +401,9 @@ class MastodonEmailProcessor:
                 log_func = self._logger.warning
             log_func('An error occurred while processing "%s@%s" at toot %s: %s',
                      toot.account.username, toot.get_hostname(), toot.id, exc)
+            return False
+
+        return True
 
     def _get_toot_instance_type(self, hostname):
         nodeinfo_url = None
@@ -430,6 +435,9 @@ class MastodonEmailProcessor:
         return None, None
 
     def _get_original_toot(self, toot):
+        if not self._can_toot_be_processed(toot):
+            return toot
+
         parsed_url = urlsplit(toot.url)
         originating_hostname = parsed_url.netloc
         # this probably won't work for other services than Mastodon
@@ -437,7 +445,7 @@ class MastodonEmailProcessor:
 
         try:
             new_toot = self._request(f'api/v1/statuses/{originating_toot_id}', originating_hostname)
-            return Toot(new_toot)
+            return Toot(new_toot, boosted_by_toot=toot.boosted_by_toot)
         except (urllib3.exceptions.MaxRetryError, requests.exceptions.ProxyError) as exc:
             self._logger.info('Originating toot with ID "%s" on instance "%s" could '
                               'not be retrieved: %s',
@@ -488,7 +496,8 @@ class MastodonEmailProcessor:
                 raise
 
             if in_reply_to:
-                toot.in_reply_to = Toot(in_reply_to)
+                toot.in_reply_to = Toot(in_reply_to, boosted_by_toot=toot.boosted_by_toot)
+
                 # re-request the toot from the originating instance to get account and status ids
                 if self._can_toot_be_processed(toot):
                     toot.in_reply_to = self._get_original_toot(toot.in_reply_to)
@@ -496,15 +505,26 @@ class MastodonEmailProcessor:
                 if not self._is_toot_already_processed(toot.in_reply_to):
                     self._process_toot(toot.in_reply_to)
 
+    def _get_toot_reblog(self, toot):
+        if toot.is_boost:
+            if toot.reblog is None:
+                return toot
+            # remember toot from user who boosted it
+            self._add_toot_to_toot_state(toot)
+            # replace toot with the boosted one
+            return Toot(toot.reblog, boosted_by_toot=toot)
+
+        return toot
+
     def _factor_mail_message(self, toot, text_content):
         posted_by_username = toot.get_username(compound=False)
         posted_by_display_name = toot.get_display_name(compound=False)
         posted_by = f'{posted_by_display_name} (@{posted_by_username})'
 
-        if toot.is_boost:
-            boosted_by = f'{toot.account.display_name} (@{toot.account.username})'
+        if toot.boosted_by_toot:
+            boosted_by = f'{toot.boosted_by_toot.account.display_name} (@{toot.boosted_by_toot.account.username})'
         else:
-            pass
+            boosted_by = '-'
 
         if toot.application:
             application = f'{toot.application.name}'
@@ -521,7 +541,7 @@ class MastodonEmailProcessor:
             in_reply_to_url=toot.in_reply_to.url if toot.is_reply and toot.in_reply_to else '-',
             videos=self._factor_video_list(toot),
             card=self._factor_card(toot),
-            url=toot.reblog.url if toot.is_boost else toot.url,
+            url=toot.url,
             toot_id=toot.id,
             application=application,
             hostname=toot.get_hostname())
@@ -728,8 +748,9 @@ class MastodonEmailProcessor:
                     skipped_toots_count += 1
                     continue
 
-                self._process_toot(toot)
-                toots_count += 1
+                processed = self._process_toot(toot)
+                if processed:
+                    toots_count += 1
 
             self._logger.info(
                 'Processed %s new toot(s) and skipped %s already processed toot(s) for "#%s@%s"',
