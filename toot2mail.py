@@ -54,8 +54,20 @@ Card URL:   {card_url}:
 Card Title: {card_title}'''
 
 
-# Taken from Mastodon.py's AttribAccessDict
-# (https://github.com/halcy/Mastodon.py/blob/master/mastodon/Mastodon.py#L128)
+INCOMPATIBLE_ACTIVITY_PUB_INSTANCES = (
+    'akkoma',
+    'firefish',
+    'friendica',
+    'gotosocial',
+    'mammuthus (experimental)',
+    'mitra',
+    'pixelfed',
+    'peertube',
+)
+
+
+# Based on Mastodon.py's AttribAccessDict
+# (https://github.com/halcy/Mastodon.py/blob/master/mastodon/types_base.py)
 class AttribAccessDict(dict):
     def __getattr__(self, attr):
         if attr in self:
@@ -332,19 +344,24 @@ class MastodonEmailProcessor:
         account = self._request('api/v1/accounts/lookup', hostname, query_params={'acct': username})
         return account['id']
 
-    def _request(self, api_endpoint, hostname, query_params=None):
-        if not hostname:
-            raise ValueError('No Mastodon host set!')
+    def _request(self, api_endpoint, hostname, query_params=None, url=None):
+        if not hostname and not url:
+            raise ValueError('No Mastodon instance set!')
 
-        cache_key = (hostname, api_endpoint, str(query_params))
+        if url:
+            cache_key = (url, str(query_params))
+        else:
+            cache_key = (hostname, api_endpoint, str(query_params))
         result = self._cache.get(cache_key, '__no_cache_result__')
         if result != '__no_cache_result__':
             return result
 
-        url = urljoin(f'https://{hostname}', api_endpoint)
+        if not url:
+            url = urljoin(f'https://{hostname}', api_endpoint)
+
         response = requests.get(url, params=query_params, proxies=self._proxies,
                                 timeout=self._timeout,
-                                headers= {'User-Agent': HTTP_USER_AGENT})
+                                headers={'User-Agent': HTTP_USER_AGENT})
         response.raise_for_status()
 
         response_json = response.json()
@@ -383,6 +400,35 @@ class MastodonEmailProcessor:
             log_func('An error occurred while processing "%s@%s" at toot %s: %s',
                      toot.account.username, toot.get_hostname(), toot.id, exc)
 
+    def _get_toot_instance_type(self, hostname):
+        nodeinfo_url = None
+        try:
+            response = self._request('.well-known/nodeinfo', hostname)
+        except (urllib3.exceptions.MaxRetryError, requests.exceptions.ProxyError,
+                requests.exceptions.HTTPError) as exc:
+            self._logger.info('Error on querying node info from %s: %s', hostname, exc)
+            return None, None
+
+        for link in response.get('links', []):
+            if link.get('rel') == 'http://nodeinfo.diaspora.software/ns/schema/2.0':
+                nodeinfo_url = link.get('href')
+                break
+
+        if nodeinfo_url:
+            try:
+                nodeinfo = self._request(api_endpoint=None, hostname=None, url=nodeinfo_url)
+            except (urllib3.exceptions.MaxRetryError, requests.exceptions.ProxyError,
+                    requests.exceptions.HTTPError) as exc:
+                self._logger.info('Error on querying node info from %s: %s', nodeinfo_url, exc)
+                return None, None
+
+            software_name = nodeinfo.get('software', {}).get('name', 'unknown')
+            software_name = software_name.lower()
+            software_version = nodeinfo.get('software', {}).get('version', 'unknown')
+            return software_name, software_version
+
+        return None, None
+
     def _get_original_toot(self, toot):
         parsed_url = urlsplit(toot.url)
         originating_hostname = parsed_url.netloc
@@ -393,7 +439,7 @@ class MastodonEmailProcessor:
             new_toot = self._request(f'api/v1/statuses/{originating_toot_id}', originating_hostname)
             return Toot(new_toot)
         except (urllib3.exceptions.MaxRetryError, requests.exceptions.ProxyError) as exc:
-            self._logger.info('Originating toot with ID "%s" on instance "%s" could'
+            self._logger.info('Originating toot with ID "%s" on instance "%s" could '
                               'not be retrieved: %s',
                               originating_toot_id, originating_hostname, exc)
         except requests.exceptions.HTTPError as exc:
@@ -408,8 +454,28 @@ class MastodonEmailProcessor:
 
         return toot
 
+    def _can_toot_be_processed(self, toot):
+        software_name = toot.get('software_name')
+        if software_name is None:
+            software_name, software_version = self._get_toot_instance_type(toot.get_hostname())
+            toot['software_name'] = software_name
+            toot['software_version'] = software_version
+
+        if software_name in INCOMPATIBLE_ACTIVITY_PUB_INSTANCES:
+            # ignore toots from instances which do not offer a Mastodon like API
+            self._logger.info('Toot retrieval with ID "%s" on instance "%s" skipped '
+                              'because incompatible instance software: %s %s',
+                              toot.id, toot.get_hostname(),
+                              toot.get('software_name'), toot.get('software_version'))
+            return False
+
+        return True
+
     def _get_toot_in_reply_to(self, toot):
         if toot.in_reply_to_id:
+            if not self._can_toot_be_processed(toot):
+                return
+
             try:
                 in_reply_to = self._request(f'api/v1/statuses/{toot.in_reply_to_id}', toot.get_hostname())
             except requests.exceptions.HTTPError as exc:
@@ -424,7 +490,8 @@ class MastodonEmailProcessor:
             if in_reply_to:
                 toot.in_reply_to = Toot(in_reply_to)
                 # re-request the toot from the originating instance to get account and status ids
-                toot.in_reply_to = self._get_original_toot(toot.in_reply_to)
+                if self._can_toot_be_processed(toot):
+                    toot.in_reply_to = self._get_original_toot(toot.in_reply_to)
 
                 if not self._is_toot_already_processed(toot.in_reply_to):
                     self._process_toot(toot.in_reply_to)
