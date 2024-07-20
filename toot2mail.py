@@ -31,7 +31,7 @@ import markdownify
 import requests
 from PIL import Image, ImageDraw
 
-HTTP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; rv:123.0) Gecko/20100101 Firefox/123.0'
+HTTP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefox/128.0'
 CONFIG_FILENAME = '~/.config/toot2mail.conf'
 MAIL_MESSAGE_TEMPLATE = '''{toot}
 
@@ -521,11 +521,12 @@ class MastodonEmailProcessor:
 
     def _factor_toot_attachments(self, toot):
         attachments = []
+        hostname = toot.get_hostname()
         # card image
         card = toot.card
         if card and card.image:
             file_name = f'card_{Path(card.image).name}'
-            file_name, file_content = self._get_image(card.image, file_name)
+            file_name, file_content = self._get_image(card.image, file_name, hostname)
             attachments.append((file_name, file_content))
 
         # media attachments
@@ -536,16 +537,17 @@ class MastodonEmailProcessor:
             media_url = media.url if media.type == 'image' else media.preview_url
 
             file_name = Path(media_url).name
-            file_name, file_content = self._get_image(media_url, file_name)
+            file_name, file_content = self._get_image(media_url, file_name, hostname)
             attachments.append((file_name, file_content))
 
         return attachments
 
-    def _get_image(self, image_url, file_name):
+    def _get_image(self, image_url, file_name, hostname):
         self._logger.info('Retrieve image "%s"', image_url)
         try:
             response = requests.get(image_url, proxies=self._proxies, timeout=self._timeout,
-                                    headers= {'User-Agent': HTTP_USER_AGENT})
+                                    headers={'User-Agent': HTTP_USER_AGENT,
+                                             'Referer': f'https://{hostname}'})
 
             response.raise_for_status()
         except requests.exceptions.HTTPError as err:
@@ -581,9 +583,6 @@ class MastodonEmailProcessor:
         return result.getvalue()
 
     def _downscale_image(self, image_data):
-        if Image is None:  # pillow / PIL not installed
-            return image_data
-
         if not self._image_maximum_size:
             return image_data
 
