@@ -21,6 +21,13 @@ mail_recipient = toot2mail@example.com
 mail_server_hostname = localhost
 mail_server_port = 25
 
+[content_replacement]
+# Links (or other content) in toots can be replaced with alternatives,
+# e.g. replace links to services you don't prefer with better alternatives
+# For inspiration, see https://github.com/libredirect/instances
+https://(.*\.)?youtube\.com/=https://some.other.instance/
+https://(.*\.)?reddit\.com/=https://alternative.reddit.tld/
+
 [accounts]
 # format: accountname@instance and with optional flags (noboosts,noreplies), e.g.: example@mastodon.social = noboosts,noreplies
 alice@example.com

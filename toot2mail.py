@@ -19,6 +19,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import smtplib
 import socket
 import sys
@@ -166,6 +167,7 @@ class MastodonEmailProcessor:
         self._hashtags = None
         self._references = None
         self._toot_state = None
+        self._content_replacements = {}
         self._cache = {}  # simple local instance cache for HTTP requests
 
     def process(self):
@@ -190,7 +192,7 @@ class MastodonEmailProcessor:
         self._log_farewell()
 
     def _setup_config(self):
-        config_parser = ConfigParser(allow_no_value=True)
+        config_parser = ConfigParser(allow_no_value=True, delimiters=('=',))
         # read config file from location as specified via command line but fail it if doesn't exist
         config_filename = Path(CONFIG_FILENAME).expanduser()
         config_file_paths = ('toot2mail.conf', config_filename)
@@ -209,6 +211,9 @@ class MastodonEmailProcessor:
         image_maximum_size = config_parser.get('settings', 'image_maximum_size', fallback=None)
         if image_maximum_size:
             self._image_maximum_size = [int(value) for value in image_maximum_size.split(',')]
+
+        for regex, replacement in config_parser.items('content_replacement', raw=True):
+            self._content_replacements[regex] = replacement
 
         proxy = config_parser.get('settings', 'proxy')
         if proxy:
@@ -343,9 +348,10 @@ class MastodonEmailProcessor:
             toot = self._get_original_toot(toot)
 
             self._get_toot_in_reply_to(toot)
+            text_content = self._factor_text_content(toot)
             mail_from = self._factor_mail_from(toot)
-            subject = self._factor_mail_subject(toot)
-            message = self._factor_mail_message(toot)
+            subject = self._factor_mail_subject(text_content)
+            message = self._factor_mail_message(toot, text_content)
             toot_timestamp = self._factor_toot_timestamp(toot)
             attachments = self._factor_toot_attachments(toot)
             headers = self._factor_mail_headers(toot)
@@ -406,7 +412,7 @@ class MastodonEmailProcessor:
                 if not self._is_toot_already_processed(toot.in_reply_to):
                     self._process_toot(toot.in_reply_to)
 
-    def _factor_mail_message(self, toot):
+    def _factor_mail_message(self, toot, text_content):
         posted_by_username = toot.get_username(compound=False)
         posted_by_display_name = toot.get_display_name(compound=False)
         posted_by = f'{posted_by_display_name} (@{posted_by_username})'
@@ -424,7 +430,7 @@ class MastodonEmailProcessor:
             application = '-'
 
         message = MAIL_MESSAGE_TEMPLATE.format(
-            toot=self._html2text(toot.content),
+            toot=text_content,
             username=toot.account.username,
             posted_by=posted_by,
             boosted_by=boosted_by,
@@ -451,7 +457,8 @@ class MastodonEmailProcessor:
     def _factor_card(self, toot):
         card = toot.card
         if card:
-            return CARD_TEMPLATE.format(card_url=card.url, card_title=card.title)
+            card_url = self._perform_content_replacements(card.url)
+            return CARD_TEMPLATE.format(card_url=card_url, card_title=card.title)
 
         return ''
 
@@ -459,14 +466,17 @@ class MastodonEmailProcessor:
         encoded_name = Header(toot.get_display_name(), 'utf-8').encode()
         return f'{encoded_name} <{self._mail_from}>'
 
-    def _factor_mail_subject(self, toot):
-        content = toot.content
-        subject = self._html2text(content)
+    def _factor_mail_subject(self, text_content):
+        if len(text_content) > self._mail_maximum_subject_length:
+            text_content = text_content[:self._mail_maximum_subject_length] + '...'
 
-        if len(subject) > self._mail_maximum_subject_length:
-            subject = subject[:self._mail_maximum_subject_length] + '...'
+        return Header(text_content or '...', 'utf-8')
 
-        return Header(subject or '...', 'utf-8')
+    def _factor_text_content(self, toot):
+        text_content = self._html2text(toot.content)
+        text_content = self._perform_content_replacements(text_content)
+
+        return text_content
 
     def _html2text(self, html):
         if not html:
@@ -474,6 +484,15 @@ class MastodonEmailProcessor:
 
         return markdownify.markdownify(html, strip=['a'],
                                        escape_asterisks=False, escape_underscores=False).strip()
+
+    def _perform_content_replacements(self, content):
+        if not content:
+            return content
+
+        for pattern, replacement in self._content_replacements.items():
+            content = re.sub(pattern, replacement, content)
+
+        return content
 
     def _factor_toot_timestamp(self, toot):
         toot_created_at = toot.created_at
