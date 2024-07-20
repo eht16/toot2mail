@@ -80,6 +80,17 @@ class AttribAccessDict(dict):
         super().__setattr__(attr, val)
 
 
+class NoTracebackFormatter(logging.Formatter):
+    """
+    Formatter to omit stacktrace information from logrecords, useful for SyslogHandler
+    """
+    def format(self, record):
+        record.message = record.getMessage()
+        if self.usesTime():
+            record.asctime = self.formatTime(record, self.datefmt)
+        return self.formatMessage(record)
+
+
 class Toot(AttribAccessDict):
 
     def __init__(self, *args, **kwargs):
@@ -252,14 +263,14 @@ class MastodonEmailProcessor:
 
     def _setup_logger(self):
         me = Path(__file__).name
+        log_format = '[%(levelname)+8s] [%(process)-8s] [%(name)-30s] %(message)s'
         stream_handler = logging.StreamHandler()
         stream_handler.setLevel(logging.WARNING)
         syslog_handler = logging.handlers.SysLogHandler(address='/dev/log')
         syslog_handler.ident = f'{me}: '
-        logging.basicConfig(
-            format='[%(levelname)+8s] [%(process)-8s] [%(name)-30s] %(message)s',
-            level=logging.INFO,
-            handlers=[syslog_handler, stream_handler])
+        syslog_handler.setFormatter(NoTracebackFormatter(fmt=log_format))
+        logging.basicConfig(format=log_format, level=logging.INFO,
+                            handlers=[syslog_handler, stream_handler])
 
         self._logger = logging.getLogger(me)
 
