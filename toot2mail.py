@@ -202,11 +202,11 @@ class MastodonEmailProcessor:
             if toot_reference:
                 self._process_single_toot(toot_reference)
             elif tag_reference:
-                hashtag, hostname = tag_reference.split('@')
+                hostname, hashtag = self._parse_tag_reference(tag_reference)
                 self._process_hashtag(hashtag, hostname)
             elif user_reference:
-                username, hostname = user_reference.split('@')
-                self._process_user(username, hostname, False, False)
+                hostname, username = self._parse_user_reference(user_reference)
+                self._process_user(username, hostname, exclude_replies=False, exclude_boosts=False)
             else:
                 for username, hostname, exclude_replies, exclude_boosts in self._usernames:
                     self._process_user(username, hostname, exclude_replies, exclude_boosts)
@@ -298,11 +298,49 @@ class MastodonEmailProcessor:
                 self._toot_state = json.load(state_file)
 
     def _process_single_toot(self, toot_reference):
-        toot_id, hostname = toot_reference.split('@')
+        # try to parse the toot reference as URL, otherwise expect it as toot_id@instance.tld
+        hostname, toot_id = self._parse_hostname_and_toot_id_from_url(toot_reference)
+        if not hostname:
+            toot_id, hostname = toot_reference.split('@')
+
         toot_dict = self._request(f'api/v1/statuses/{toot_id}', hostname)
         toot = Toot(toot_dict)
         self._process_toot(toot)
         self._logger.info('Processed toot(s) for %s@%s', toot.id, toot.get_hostname())
+
+    def _parse_tag_reference(self, tag_reference):
+        parsed_url = urlsplit(tag_reference)
+        if parsed_url.netloc:
+            hostname = parsed_url.netloc
+            if parsed_url.path.startswith('/tags/'):
+                hashtag = parsed_url.path.split('/')[-1]
+            else:
+                raise ValueError('Invalid hashtag URL format')
+        else:
+            hashtag, hostname = tag_reference.split('@')
+
+        return hostname, hashtag
+
+    def _parse_user_reference(self, user_reference):
+        hostname = None
+        parsed_url = urlsplit(user_reference)
+        if parsed_url.netloc:
+            hostname = parsed_url.netloc
+            if parsed_url.path.startswith('/@'):
+                path = parsed_url.path[2:]  # strip leading '/@'
+                if '@' in path:
+                    # reference to an account on another instance,
+                    # e.g. https://mastodon.social/@eht16@floss.social
+                    username, hostname = path.split('@')
+                else:
+                    username = path
+        else:
+            username, hostname = user_reference.split('@')
+
+        if not hostname or not username:
+            raise ValueError('Invalid hashtag URL format')
+
+        return hostname, username
 
     def _process_user(self, username, hostname, exclude_replies, exclude_boosts):
         try:
@@ -311,6 +349,7 @@ class MastodonEmailProcessor:
             toots_count = 0
             skipped_toots_count = 0
             toots = self._get_toots(username, hostname)
+
             for toot in toots:
                 if self._is_toot_already_processed(toot):
                     skipped_toots_count += 1
@@ -451,11 +490,8 @@ class MastodonEmailProcessor:
         if not self._can_toot_be_processed(toot):
             return toot
 
-        parsed_url = urlsplit(toot.url)
-        originating_hostname = parsed_url.netloc
-        # this probably won't work for other services than Mastodon
-        originating_toot_id = parsed_url.path.split('/')[-1]  # TODO make this robust
-
+        originating_hostname, originating_toot_id = self._parse_hostname_and_toot_id_from_url(
+            toot.url)
         try:
             new_toot = self._request(f'api/v1/statuses/{originating_toot_id}', originating_hostname)
             return Toot(new_toot, boosted_by_toot=toot.boosted_by_toot)
@@ -474,6 +510,13 @@ class MastodonEmailProcessor:
                 raise
 
         return toot
+
+    def _parse_hostname_and_toot_id_from_url(self, url):
+        parsed_url = urlsplit(url)
+        hostname = parsed_url.netloc
+        # this probably won't work for other services than Mastodon
+        toot_id = parsed_url.path.split('/')[-1]  # TODO make this robust
+        return hostname, toot_id
 
     def _can_toot_be_processed(self, toot):
         software_name = toot.get('software_name')
@@ -794,12 +837,18 @@ class MastodonEmailProcessor:
 def main():
     argument_parser = ArgumentParser()
     exclusive_group = argument_parser.add_mutually_exclusive_group()
-    exclusive_group.add_argument('-s', '--toot', dest='toot_reference',
-                                 help='Process a single Toot, specified as <id>@<instance.tld>')
-    exclusive_group.add_argument('-t', '--tag', dest='tag',
-                                 help='Process a given tag, specified as <tag>@<instance.tld>')
-    exclusive_group.add_argument('-u', '--user', dest='user',
-                                 help='Process a given user, specified as <user>@<instance.tld>')
+    exclusive_group.add_argument(
+        '-s', '--toot', dest='toot_reference',
+        help='Process a single Toot, specified as <id>@<instance.tld> '
+             'or URL like https://instance.tld/@someusername/123456789012345678')
+    exclusive_group.add_argument(
+        '-t', '--tag', dest='tag',
+        help='Process a given tag, specified as <tag>@<instance.tld> '
+             'or URL like https://instance.tld/tags/sometag')
+    exclusive_group.add_argument(
+        '-u', '--user', dest='user',
+        help='Process a given user, specified as <user>@<instance.tld> or URL like '
+             'https://instance.tld/@someusername')
     arguments = argument_parser.parse_args()
 
     processor = MastodonEmailProcessor()
