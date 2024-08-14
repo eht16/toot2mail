@@ -56,6 +56,7 @@ Card Title: {card_title}'''
 
 INCOMPATIBLE_ACTIVITY_PUB_INSTANCES = (
     'akkoma',
+    'calckey',
     'firefish',
     'friendica',
     'gotosocial',
@@ -63,6 +64,7 @@ INCOMPATIBLE_ACTIVITY_PUB_INSTANCES = (
     'mitra',
     'pixelfed',
     'peertube',
+    'snac',
 )
 
 
