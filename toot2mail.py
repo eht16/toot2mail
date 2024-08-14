@@ -642,7 +642,7 @@ class MastodonEmailProcessor:
         if not html:
             return html
 
-        return markdownify.markdownify(html, strip=['a'],
+        return markdownify.markdownify(html, strip=['a'], escape_misc=False,
                                        escape_asterisks=False, escape_underscores=False).strip()
 
     def _perform_content_replacements(self, content):
