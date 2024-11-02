@@ -196,7 +196,8 @@ class MastodonEmailProcessor:
         self._content_replacements = {}
         self._cache = {}  # simple local instance cache for HTTP requests
 
-    def process(self, toot_reference=None, tag_reference=None, user_reference=None):
+    def process(self, toot_reference=None, tag_reference=None, user_reference=None,
+                thread_reference=None):
         self._setup_config()
         self._setup_logger()
         self._log_hello()
@@ -207,6 +208,8 @@ class MastodonEmailProcessor:
         try:
             if toot_reference:
                 self._process_single_toot(toot_reference)
+            elif thread_reference:
+                self._process_toot_thread(thread_reference)
             elif tag_reference:
                 hostname, hashtag = self._parse_tag_reference(tag_reference)
                 self._process_hashtag(hashtag, hostname)
@@ -325,6 +328,43 @@ class MastodonEmailProcessor:
         if self._is_exception_timeout(exc) or self._is_exception_rate_limit(exc):
             log_func = self._logger.warning
         log_func(message, *args)
+
+    def _process_toot_thread(self, thread_reference):
+        # try to parse the toot reference as URL, otherwise expect it as toot_id@instance.tld
+        hostname, thread_toot_id = self._parse_hostname_and_toot_id_from_url(thread_reference)
+        if not hostname:
+            thread_toot_id, hostname = thread_reference.split('@')
+
+        try:
+            context_response = self._request(f'api/v1/statuses/{thread_toot_id}/context', hostname)
+        except Exception as exc:
+            self._log_error(
+                exc, 'An error occurred while processing "%s": %s', thread_reference, exc)
+
+        # process all returned Toots
+        ancestors = context_response.get('ancestors', [])
+        toots = ancestors + context_response.get('descendants', [])
+        for toot_dict in toots:
+            toot = Toot(toot_dict)
+            try:
+                self._process_toot(toot)
+            except Exception as exc:
+                self._log_error(exc, 'An error occurred while processing "%s@%s": %s',
+                                toot.account.username, toot.get_hostname(), exc)
+
+        # if there are any ancestors, find the first (should be the OP) and fetch its context to
+        # process also other branches of the thread
+        for toot_dict in ancestors:
+            if toot_dict.get('in_reply_to_id', 'unknown') is None:
+                # if we got a toot which is not a reply, it should be the start of the thread
+                try:
+                    self._process_toot_thread(toot_dict['url'])
+                except Exception as exc:
+                    self._log_error(exc, 'An error occurred while processing "%s": %s',
+                                    thread_reference, exc)
+                break
+
+        self._logger.info('Processed toot thread for %s@%s', thread_toot_id, hostname)
 
     def _parse_tag_reference(self, tag_reference):
         parsed_url = urlsplit(tag_reference)
@@ -885,11 +925,15 @@ def main():
         '-u', '--user', dest='user',
         help='Process a given user, specified as <user>@<instance.tld> or URL like '
              'https://instance.tld/@someusername')
+    exclusive_group.add_argument(
+        '--thread', dest='thread_reference',
+        help='Process the whole thread of the given toot, specified as <id>@<instance.tld> '
+             'or URL like https://instance.tld/@someusername/123456789012345678')
     arguments = argument_parser.parse_args()
 
     processor = MastodonEmailProcessor()
     processor.process(toot_reference=arguments.toot_reference, tag_reference=arguments.tag,
-                      user_reference=arguments.user)
+                      user_reference=arguments.user, thread_reference=arguments.thread_reference)
 
 
 if __name__ == '__main__':
