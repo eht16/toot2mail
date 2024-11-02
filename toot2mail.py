@@ -311,8 +311,20 @@ class MastodonEmailProcessor:
 
         toot_dict = self._request(f'api/v1/statuses/{toot_id}', hostname)
         toot = Toot(toot_dict)
-        self._process_toot(toot)
+        try:
+            toot_dict = self._request(f'api/v1/statuses/{toot_id}', hostname)
+            toot = Toot(toot_dict)
+            self._process_toot(toot)
+        except Exception as exc:
+            self._log_error(exc, 'An error occurred while processing "%s": %s', toot_reference, exc)
+
         self._logger.info('Processed toot(s) for %s@%s', toot.id, toot.get_hostname())
+
+    def _log_error(self, exc, message, *args):
+        log_func = self._logger.exception
+        if self._is_exception_timeout(exc) or self._is_exception_rate_limit(exc):
+            log_func = self._logger.warning
+        log_func(message, *args)
 
     def _parse_tag_reference(self, tag_reference):
         parsed_url = urlsplit(tag_reference)
@@ -374,15 +386,23 @@ class MastodonEmailProcessor:
                 'Processed %s new toot(s) and skipped %s already processed toot(s) for "%s@%s"',
                 toots_count, skipped_toots_count, username, hostname)
         except Exception as exc:
-            log_func = self._logger.exception
-            if self._is_exception_timeout(exc):
-                log_func = self._logger.warning
-            log_func('An error occurred while processing "%s@%s": %s', username, hostname, exc)
+            self._log_error(exc, 'An error occurred while processing "%s@%s": %s',
+                            username, hostname, exc)
 
     def _is_exception_timeout(self, exc):
         if isinstance(exc, (TimeoutError, requests.exceptions.RequestException)):
             exc_message = str(exc)
-            if 'timed out' in exc_message or 'TimeoutError' in exc_message:
+            if 'timed out' in exc_message or \
+                    'TimeoutError' in exc_message or \
+                    'Gateway Time-out' in exc_message:
+                return True
+        return False
+
+    def _is_exception_rate_limit(self, exc):
+        if isinstance(exc, requests.exceptions.RequestException):
+            response = getattr(exc, 'response', None)
+            status_code = requests.status_codes.codes.TOO_MANY_REQUESTS
+            if response is not None and getattr(response, 'status_code', None) == status_code:
                 return True
         return False
 
@@ -454,11 +474,8 @@ class MastodonEmailProcessor:
             # remember toot
             self._add_toot_to_toot_state(toot)
         except Exception as exc:
-            log_func = self._logger.exception
-            if self._is_exception_timeout(exc):
-                log_func = self._logger.warning
-            log_func('An error occurred while processing "%s@%s" at toot %s: %s',
-                     toot.account.username, toot.get_hostname(), toot.id, exc)
+            self._log_error(exc, 'An error occurred while processing "%s@%s" at toot %s: %s',
+                            toot.account.username, toot.get_hostname(), toot.id, exc)
             return False
 
         return True
@@ -833,10 +850,8 @@ Poll ({poll.votes_count} votes so far, expires at {expires_at}):
                 'Processed %s new toot(s) and skipped %s already processed toot(s) for "#%s@%s"',
                 toots_count, skipped_toots_count, hashtag, hostname)
         except Exception as exc:
-            log_func = self._logger.exception
-            if self._is_exception_timeout(exc):
-                log_func = self._logger.warning
-            log_func('An error occurred while processing "#%s@%s": %s', hashtag, hostname, exc)
+            self._log_error(exc, 'An error occurred while processing "#%s@%s": %s',
+                            hashtag, hostname, exc)
 
     def _get_toots_for_hashtag(self, hashtag, hostname):
         url = f'api/v1/timelines/tag/{hashtag}'
