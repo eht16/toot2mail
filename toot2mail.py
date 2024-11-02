@@ -618,7 +618,7 @@ class MastodonEmailProcessor:
                 toot.in_reply_to = Toot(in_reply_to, boosted_by_toot=toot.boosted_by_toot)
 
                 # re-request the toot from the originating instance to get account and status ids
-                if self._can_toot_be_processed(toot):
+                if self._can_toot_be_processed(toot.in_reply_to):
                     toot.in_reply_to = self._get_original_toot(toot.in_reply_to)
 
                 if not self._is_toot_already_processed(toot.in_reply_to):
