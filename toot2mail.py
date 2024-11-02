@@ -35,7 +35,7 @@ HTTP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefo
 CONFIG_FILENAME = '~/.config/toot2mail.conf'
 MAIL_MESSAGE_TEMPLATE = '''{toot}
 
-{card}
+{card}{poll_text}
 --------------------------------
 Videos: {videos}
 Posted by: {posted_by}
@@ -125,6 +125,11 @@ class Toot(AttribAccessDict):
     def card(self):
         card = self.get('card')
         return AttribAccessDict(card or {})
+
+    @property
+    def poll(self):
+        poll = self.get('poll')
+        return AttribAccessDict(poll or {})
 
     @property
     def account(self):
@@ -597,6 +602,7 @@ class MastodonEmailProcessor:
             in_reply_to_url=toot.in_reply_to.url if toot.is_reply and toot.in_reply_to else '-',
             videos=self._factor_video_list(toot),
             card=self._factor_card(toot),
+            poll_text=self._factor_poll_text(toot),
             url=toot.url,
             toot_id=toot.id,
             application=application,
@@ -619,6 +625,20 @@ class MastodonEmailProcessor:
         if card:
             card_url = self._perform_content_replacements(card.url)
             return CARD_TEMPLATE.format(card_url=card_url, card_title=card.title)
+
+        return ''
+
+    def _factor_poll_text(self, toot):
+        poll = toot.poll
+        if poll:
+            expires_at = datetime.fromisoformat(poll.expires_at).strftime('%c %Z')
+            poll_text = f'''
+Poll ({poll.votes_count} votes so far, expires at {expires_at}):
+'''
+            for option in poll.options:
+                poll_text += f'[ ] {option["title"]} ({option["votes_count"]} votes so far)\n'
+
+            return poll_text
 
         return ''
 
