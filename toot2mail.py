@@ -62,6 +62,7 @@ INCOMPATIBLE_ACTIVITY_PUB_INSTANCES = (
     'gotosocial',
     'mammuthus (experimental)',
     'mitra',
+    'mobilizon',
     'pixelfed',
     'peertube',
     'snac',
