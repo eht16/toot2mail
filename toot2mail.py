@@ -25,11 +25,12 @@ import smtplib
 import socket
 import sys
 import textwrap
-import urllib3
 
+from PIL import Image, ImageDraw
 import markdownify
 import requests
-from PIL import Image, ImageDraw
+import urllib3
+
 
 HTTP_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; rv:128.0) Gecko/20100101 Firefox/128.0'
 CONFIG_FILENAME = '~/.config/toot2mail.conf'
@@ -75,11 +76,12 @@ class AttribAccessDict(dict):
     def __getattr__(self, attr):
         if attr in self:
             return self[attr]
-        raise AttributeError("Attribute not found: " + str(attr))
+        raise AttributeError('Attribute not found: ' + str(attr))
 
     def __setattr__(self, attr, val):
         if attr in self:
-            raise AttributeError("Attribute-style access is read only")
+            msg = 'Attribute-style access is read only'
+            raise AttributeError(msg)
         super().__setattr__(attr, val)
 
 
@@ -151,9 +153,8 @@ class Toot(AttribAccessDict):
         return f'{username_lowercase}@{hostname_lowercase}'
 
     def get_username(self, compound=True):
-        if self.boosted_by_toot is not None:
-            if compound:
-                return f'{self.boosted_by_toot.account.username}: {self.account.username}'
+        if self.boosted_by_toot is not None and compound:
+            return f'{self.boosted_by_toot.account.username}: {self.account.username}'
 
         return self.account.username
 
@@ -240,7 +241,8 @@ class MastodonEmailProcessor:
         self._timeline_limit = config_parser.get('settings', 'timeline_limit')
         self._state_file_path = Path(config_parser.get('settings', 'state_file_path'))
         self._lock_file_path = Path(config_parser.get('settings', 'lock_file_path'))
-        self._mail_maximum_subject_length = config_parser.getint('settings', 'mail_maximum_subject_length')
+        self._mail_maximum_subject_length = config_parser.getint(
+            'settings', 'mail_maximum_subject_length')
         self._mail_from = config_parser.get('settings', 'mail_from')
         self._mail_recipient = config_parser.get('settings', 'mail_recipient')
         self._mail_server_hostname = config_parser.get('settings', 'mail_server_hostname')
@@ -260,15 +262,15 @@ class MastodonEmailProcessor:
             self._proxies = {'http': proxy, 'https': proxy}
 
         self._usernames = []
-        for uid, flags in config_parser.items('accounts'):
+        for uid, flags_raw in config_parser.items('accounts'):
             username, hostname = uid.split('@')
-            flags = flags.split(',')
+            flags = flags_raw.split(',')
             exclude_replies = 'noreplies' in flags
             exclude_boosts = 'noboosts' in flags
             self._usernames.append((username, hostname, exclude_replies, exclude_boosts))
 
         self._hashtags = []
-        for uid, flags in config_parser.items('hashtags'):
+        for uid, _ in config_parser.items('hashtags'):
             hashtag, hostname = uid.split('@')
             self._hashtags.append((hashtag, hostname))
 
@@ -287,8 +289,9 @@ class MastodonEmailProcessor:
 
     def _assert_not_already_running(self):
         if self._lock_file_path.exists():
-            self._logger.info('Already running. Aborting.')
-            raise RuntimeError('Already running')
+            msg = 'Already running. Aborting.'
+            self._logger.info(msg)
+            raise RuntimeError(msg)
 
     def _write_lock(self):
         self._lock_file_path.touch()
@@ -373,7 +376,8 @@ class MastodonEmailProcessor:
             if parsed_url.path.startswith('/tags/'):
                 hashtag = parsed_url.path.split('/')[-1]
             else:
-                raise ValueError('Invalid hashtag URL format')
+                msg = 'Invalid hashtag URL format'
+                raise ValueError(msg)
         else:
             hashtag, hostname = tag_reference.split('@')
 
@@ -381,6 +385,7 @@ class MastodonEmailProcessor:
 
     def _parse_user_reference(self, user_reference):
         hostname = None
+        username = None
         parsed_url = urlsplit(user_reference)
         if parsed_url.netloc:
             hostname = parsed_url.netloc
@@ -396,7 +401,8 @@ class MastodonEmailProcessor:
             username, hostname = user_reference.split('@')
 
         if not hostname or not username:
-            raise ValueError('Invalid hashtag URL format')
+            msg = 'Invalid hashtag URL format'
+            raise ValueError(msg)
 
         return hostname, username
 
@@ -459,12 +465,10 @@ class MastodonEmailProcessor:
 
     def _request(self, api_endpoint, hostname, query_params=None, url=None):
         if not hostname and not url:
-            raise ValueError('No Mastodon instance set!')
+            msg = 'No Mastodon instance set!'
+            raise ValueError(msg)
 
-        if url:
-            cache_key = (url, str(query_params))
-        else:
-            cache_key = (hostname, api_endpoint, str(query_params))
+        cache_key = (url, str(query_params)) if url else (hostname, api_endpoint, str(query_params))
         result = self._cache.get(cache_key, '__no_cache_result__')
         if result != '__no_cache_result__':
             return result
@@ -604,7 +608,8 @@ class MastodonEmailProcessor:
                 return
 
             try:
-                in_reply_to = self._request(f'api/v1/statuses/{toot.in_reply_to_id}', toot.get_hostname())
+                in_reply_to = self._request(f'api/v1/statuses/{toot.in_reply_to_id}',
+                                            toot.get_hostname())
             except requests.exceptions.HTTPError as exc:
                 # ignore 404 errors, sometimes toots might get deleted
                 if exc.response.status_code == 404:
@@ -641,7 +646,8 @@ class MastodonEmailProcessor:
         posted_by = f'{posted_by_display_name} (@{posted_by_username})'
 
         if toot.boosted_by_toot:
-            boosted_by = f'{toot.boosted_by_toot.account.display_name} (@{toot.boosted_by_toot.account.username})'
+            boosted_by = (f'{toot.boosted_by_toot.account.display_name} '
+                          f'(@{toot.boosted_by_toot.account.username})')
         else:
             boosted_by = '-'
 
@@ -794,7 +800,7 @@ Poll ({poll.votes_count} votes so far, expires at {expires_at}):
         max_text_width = int(width / 10)
         wrapped_text = textwrap.wrap(text, width=max_text_width)
 
-        image = Image.new(mode="RGB", size=(width, height), color='lightgrey')
+        image = Image.new(mode='RGB', size=(width, height), color='lightgrey')
         draw = ImageDraw.Draw(image)
         for i, line in enumerate(wrapped_text):
             draw.text((25, 25 + (i * 20)), line, fill='black')
@@ -830,8 +836,9 @@ Poll ({poll.votes_count} votes so far, expires at {expires_at}):
                    'Message-ID': f'<{toot.account.username}.{hostname}.{toot.id}@{fqdn}>'}
         if toot.is_reply and toot.in_reply_to:
             in_reply_to_hostname = toot.in_reply_to.get_hostname()
-            headers['In-Reply-To'] = f'<{toot.in_reply_to.account.username}.{in_reply_to_hostname}.' \
-                                     f'{toot.in_reply_to.id}@{fqdn}>'
+            headers['In-Reply-To'] = (
+                f'<{toot.in_reply_to.account.username}.{in_reply_to_hostname}.'
+                f'{toot.in_reply_to.id}@{fqdn}>')
 
         return headers
 
@@ -900,7 +907,7 @@ Poll ({poll.votes_count} votes so far, expires at {expires_at}):
         return toots
 
     def _pause(self):
-        sleep(randint(3, 10))
+        sleep(randint(3, 10))  # noqa: S311
 
     def _write_toot_state(self):
         with open(self._state_file_path, 'w', encoding='utf-8') as state_file:
